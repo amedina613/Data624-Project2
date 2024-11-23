@@ -1,0 +1,37 @@
+---
+title: "Data624 Project 2"
+author: "Adriana Medina"
+date: "2024-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+```
+
+<header>Import Excel tables:</header></b>
+```{r}
+test_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx"
+training_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx"
+```
+
+```{r}
+test_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
+                   {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx", ., mode = "wb"); .})
+
+head(test_data_raw)
+```
+
+```{r}
+train_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
+                   {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx", ., mode = "wb"); .})
+
+head(train_data_raw)
+```
+
+
+
