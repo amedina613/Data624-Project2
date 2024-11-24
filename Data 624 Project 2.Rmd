@@ -1,6 +1,6 @@
 ---
 title: "Data624 Project 2"
-author: "Adriana Medina"
+author: "Johnny Rodriguez, Semyon Toybis, Adriana Medina"
 date: "2024-11-23"
 output: html_document
 ---
@@ -13,7 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(readxl)
 ```
 
-<header>Import Excel tables:</header></b>
+### Import Excel tables:
+
 ```{r}
 test_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx"
 training_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx"
@@ -32,6 +33,15 @@ train_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
 
 head(train_data_raw)
 ```
+### Impute Data:
 
+```{r}
+sum(is.na(test_data_raw))
+sum(is.na(train_data_raw))
+```
 
+```{r}
+colSums(is.na(train_data_raw))
+colSums(is.na(test_data_raw))
+```
 
