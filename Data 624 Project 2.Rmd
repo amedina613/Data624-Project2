@@ -16,32 +16,32 @@ library(readxl)
 ### Import Excel tables:
 
 ```{r}
-test_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx"
-training_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx"
+stu_data_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx"
+stu_eval_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx"
 ```
 
 ```{r}
-test_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
+stu_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
                    {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx", ., mode = "wb"); .})
 
-head(test_data_raw)
+head(stu_data_raw)
 ```
 
 ```{r}
-train_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
+stu_eval_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
                    {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx", ., mode = "wb"); .})
 
-head(train_data_raw)
+head(stu_eval_raw)
 ```
 ### Impute Data:
 
 ```{r}
-sum(is.na(test_data_raw))
-sum(is.na(train_data_raw))
+sum(is.na(stu_data_raw))
+sum(is.na(stu_eval_raw))
 ```
 
 ```{r}
-colSums(is.na(train_data_raw))
-colSums(is.na(test_data_raw))
+colSums(is.na(stu_data_raw))
+colSums(is.na(stu_eval_raw))
 ```
 
