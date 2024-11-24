@@ -36,12 +36,9 @@ head(stu_eval_raw)
 ### Impute Data:
 
 ```{r}
-sum(is.na(stu_data_raw))
-sum(is.na(stu_eval_raw))
+sum(is.na(stu_data_raw$PH))
+sum(is.na(stu_eval_raw$PH))
 ```
 
-```{r}
-colSums(is.na(stu_data_raw))
-colSums(is.na(stu_eval_raw))
-```
+
 
