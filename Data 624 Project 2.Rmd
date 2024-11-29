@@ -57,7 +57,7 @@ print(missing_values)
 
 ### kNN Imputation
 
-There is one character column in the data set that is separated prior to kNN imputation using the Caret::preProcess function knnImpute. This method does not support categorical columns, but we can impute this column separately. kNN imputation is performed on the numeric columns.
+There is one character column in the data set that is separated prior to kNN imputation using the Caret::preProcess function knnImpute. This method does not support categorical columns, but we can impute this column separately. kNN imputation is performed on the numeric columns with scaling because the variables have vastly different ranges.
 
 ```{r}
 # Load necessary libraries
@@ -69,8 +69,8 @@ library(VIM)
 character_column <- stu_data_raw %>% select("Brand Code")  # Select "Brand Code"
 numeric_data <- stu_data_raw %>% select(-"Brand Code")     # Exclude "Brand Code" for numeric data
 
-# Perform kNN imputation on numeric columns
-preProcess_model <- preProcess(numeric_data, method = c("knnImpute"))
+# Perform kNN imputation on numeric columns (with scaling)
+preProcess_model <- preProcess(numeric_data, method = c("center", "scale", "knnImpute"))
 numeric_data_imputed <- predict(preProcess_model, numeric_data)
 ```
 
@@ -105,7 +105,7 @@ ggplot() +
   labs(title = "Comparison of pH Before and After Imputation", x = "pH", y = "Density")
 
 ```
-This plot does not look great, there are unrealistic pH values. The standardization of kNN imputation may lead to difficulty interpreting predictions directly in the original scale.
+This plot looks like there in an increase in variance after imputation, and there are unrealistic pH values. The standardization of kNN imputation may lead to difficulty interpreting predictions directly in the original scale.
 
 ### MEAN & MODE imputation
 
