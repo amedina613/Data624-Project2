@@ -24,21 +24,136 @@ stu_eval_raw_url <- "https://github.com/amedina613/Data624-Project2/raw/refs/hea
 stu_data_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
                    {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx", ., mode = "wb"); .})
 
+stu_data_raw <- as.data.frame(stu_data_raw)
 head(stu_data_raw)
+
 ```
 
 ```{r}
 stu_eval_raw <- read_excel(tempfile(fileext = ".xlsx") %>%
                    {download.file("https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx", ., mode = "wb"); .})
-
+stu_eval_raw <- as.data.frame(stu_eval_raw)
 head(stu_eval_raw)
 ```
-### Impute Data:
+### Data Exploration:
 
 ```{r}
 sum(is.na(stu_data_raw$PH))
 sum(is.na(stu_eval_raw$PH))
 ```
 
+```{r}
+summary(stu_data_raw)
+```
 
+```{r}
+str(stu_data_raw)
+```
+```{r}
+missing_values <- colSums(is.na(stu_data_raw))
+
+print(missing_values)
+```
+
+### kNN Imputation
+
+There is one character column in the data set that is separated prior to kNN imputation using the Caret::preProcess function knnImpute. This method does not support categorical columns, but we can impute this column separately. kNN imputation is performed on the numeric columns.
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(dplyr)
+library(VIM)
+
+# Separate the "Brand Code" column (categorical) and numeric data
+character_column <- stu_data_raw %>% select("Brand Code")  # Select "Brand Code"
+numeric_data <- stu_data_raw %>% select(-"Brand Code")     # Exclude "Brand Code" for numeric data
+
+# Perform kNN imputation on numeric columns
+preProcess_model <- preProcess(numeric_data, method = c("knnImpute"))
+numeric_data_imputed <- predict(preProcess_model, numeric_data)
+```
+
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling. After cleaning, it's recombined with the original 'Brand Code' column. 
+
+```{r}
+# Remove near-zero variance predictors
+numeric_data_imputed <- numeric_data_imputed[, -nearZeroVar(numeric_data_imputed)]
+
+# Combine numeric data back with the categorical column
+partial_data <- cbind(character_column, numeric_data_imputed)
+```
+
+The VIM::kNN function is applied to impute missing values in the Brand Code column. The imputation is based on the nearest neighbors computed using the numeric variables. The auxiliary column 'Brand Code_Imp' can be removed in the working data set because it will not be necessary for further analysis. The final data set is checked to confirm there are no missing values. 
+
+```{r}
+# Perform kNN imputation on the "Brand Code" column
+data_with_imputed_brand <- kNN(partial_data, variable = "Brand Code", k = 5)
+
+# Remove the extra "Brand Code_imp" column added by VIM::kNN
+working_dataset <- data_with_imputed_brand %>% select(-`Brand Code_imp`)
+
+# Check the final dataset
+sum(is.na(working_dataset))
+```
+
+```{r}
+# Compare distributions of pH before and after imputation
+ggplot() +
+  geom_density(data = stu_data_raw, aes(x = PH), fill = "red", alpha = 0.5) +
+  geom_density(data = working_dataset, aes(x = PH), fill = "blue", alpha = 0.5) +
+  labs(title = "Comparison of pH Before and After Imputation", x = "pH", y = "Density")
+
+```
+This plot does not look great, there are unrealistic pH values. The standardization of kNN imputation may lead to difficulty interpreting predictions directly in the original scale.
+
+### MEAN & MODE imputation
+
+```{r}
+stu_data_raw %>% count(`Brand Code`)
+```
+It seems like the most frequent value in the 'Brand Code' column is 'B'. This is what the missing values in the column will be replaced with. The following lines define that function for the categorical variable. 
+```{r}
+# Define the mode imputation function
+mode_impute <- function(x) {
+  ux <- na.omit(x)  # Remove missing values
+  ux[which.max(table(ux))]  # Return the most frequent value
+}
+```
+
+This step imputes both the numerical and categorical variables, where mean imputation is used for the numeric columns, and mode imputation is used for the categorical variable. 
+```{r}
+# Impute numeric and categorical variables
+stu_data_imputed <- stu_data_raw %>%
+  mutate(
+    across(where(is.numeric), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)),  # Mean for numeric
+    across(where(is.character), ~ ifelse(is.na(.), mode_impute(.), .))       # Mode for categorical
+  )
+```
+
+
+```{r}
+head(stu_data_imputed)
+sum(is.na(stu_data_imputed))
+```
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling. One variable was removed, "Hyd Pressure1"
+
+```{r}
+stu_data_cleaned <- stu_data_imputed[, -nearZeroVar(stu_data_imputed)]
+
+summary(stu_data_cleaned)  # Check summary statistics
+dim(stu_data_cleaned)
+```
+
+```{r}
+# Compare distributions of pH before and after imputations(knn and mean)
+ggplot() +
+  geom_density(data = stu_data_raw, aes(x = PH), fill = "red", alpha = 0.5) +
+  geom_density(data = working_dataset, aes(x = PH), fill = "blue", alpha = 0.5)+
+  geom_density(data = stu_data_cleaned, aes(x = PH), fill = "green", alpha = 0.5)+
+  labs(title = "Comparison of pH Before and After Imputation", x = "pH", y = "Density")
+
+```
+
+It seems as though using Mean Imputation best preserves the original data characteristics. We can move forward with this data set, stu_data_cleaned.
 
