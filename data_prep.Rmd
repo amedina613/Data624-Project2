@@ -1,0 +1,118 @@
+---
+title: "Data624 Project 2"
+author: "Johnny Rodriguez, Semyon Toybis, Adriana Medina"
+date: "2024-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(readxl)
+library(caret)
+library(tidyverse)
+library(VIM)
+```
+
+## Import Excel tables:
+
+Below we import the excel data from Github
+
+```{r}
+stu_data_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx'
+
+dest_file_stu_data <- 'StudentData.xlsx'
+
+stu_eval_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx'
+  
+dest_file_stu_eval <- 'StudentEvaluation.xlsx'
+
+download.file(stu_data_url, dest_file_stu_data, mode = 'wb')
+download.file(stu_eval_url, dest_file_stu_eval, mode = 'wb')
+
+stu_data_raw <- read_excel('StudentData.xlsx',col_names = T)
+stu_eval_raw <- read_excel('StudentEvaluation.xlsx',col_names = T)
+
+stu_data_raw <- as.data.frame(stu_data_raw)
+stu_eval_raw <- as.data.frame(stu_eval_raw)
+```
+
+## Data Exploration:
+
+First, we check the structured of the training set.
+
+```{r}
+str(stu_data_raw)
+```
+
+Next, we check the amount of missing values in each column.
+
+```{r}
+missing_values <- colSums(is.na(stu_data_raw))
+
+print(missing_values)
+```
+
+## Data preparation
+
+### kNN Imputation
+
+The Brand Code column is a categorical variable. We will have to convert it to dummy variables to perform knn imputation.
+
+First, we convert the column to a factor.
+
+```{r}
+stu_data_raw$`Brand Code` <- as.factor(stu_data_raw$`Brand Code`)
+```
+
+Next, we convert the Brand Code to dummy variables:
+
+```{r}
+dummy_variables <- dummyVars(~., data = stu_data_raw, fullRank = T)
+training_data <- predict(dummy_variables, newdata = stu_data_raw)
+```
+
+```{r}
+head(training_data)
+```
+
+We now have three dummy variable columns: Brand Code B, Brand Code C, and Brand Code D with zeros and ones. If all three columns have zero, then it means the Brand is A.
+
+Next, we center and scale the data and perform KNN imputation.
+
+```{r}
+# Perform kNN imputation on columns (with scaling)
+preProcess_model <- preProcess(training_data, method = c("center", "scale", "knnImpute"))
+training_data_imputed <- predict(preProcess_model, training_data)
+```
+
+We now have zero missing values:
+
+```{r}
+colSums(is.na(training_data_imputed))
+```
+
+### Near Zero Variance predictors
+
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling.
+
+There is only one variable with near zero variance:
+
+```{r}
+colnames(training_data_imputed)[nearZeroVar(training_data_imputed)]
+```
+
+```{r}
+# Remove near-zero variance predictors
+training_data_imputed <- training_data_imputed[, -nearZeroVar(training_data_imputed)]
+
+```
+
+Our working training data-set is training_data_imputed
+
+```{r}
+head(training_data_imputed)
+```
