@@ -1,0 +1,290 @@
+---
+title: "Data624 Project 2"
+author: "Johnny Rodriguez, Semyon Toybis, Adriana Medina"
+date: "2024-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(readxl)
+library(caret)
+library(tidyverse)
+library(VIM)
+```
+
+## Import Excel tables:
+
+Below we import the excel data from Github
+
+```{r}
+stu_data_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx'
+
+dest_file_stu_data <- 'StudentData.xlsx'
+
+stu_eval_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx'
+  
+dest_file_stu_eval <- 'StudentEvaluation.xlsx'
+
+download.file(stu_data_url, dest_file_stu_data, mode = 'wb')
+download.file(stu_eval_url, dest_file_stu_eval, mode = 'wb')
+
+stu_data_raw <- read_excel('StudentData.xlsx',col_names = T)
+stu_eval_raw <- read_excel('StudentEvaluation.xlsx',col_names = T)
+
+stu_data_raw <- as.data.frame(stu_data_raw)
+stu_eval_raw <- as.data.frame(stu_eval_raw)
+```
+
+## Data Exploration:
+
+First, we check the structured of the training set.
+
+```{r}
+str(stu_data_raw)
+```
+
+Next, we check the amount of missing values in each column.
+
+```{r}
+missing_values <- colSums(is.na(stu_data_raw))
+
+print(missing_values)
+```
+
+## Data preparation
+
+### Dummy variables
+
+The Brand Code column is a categorical variable. We will have to convert it to dummy variables to perform knn imputation.
+
+First, we convert the column to a factor.
+
+```{r}
+stu_data_raw$`Brand Code` <- as.factor(stu_data_raw$`Brand Code`)
+```
+
+Next, we convert the Brand Code to dummy variables:
+
+```{r}
+dummy_variables <- dummyVars(~., data = stu_data_raw, fullRank = T)
+training_data <- predict(dummy_variables, newdata = stu_data_raw)
+```
+
+```{r}
+head(training_data)
+```
+
+We now have three dummy variable columns: Brand Code B, Brand Code C, and Brand Code D with zeros and ones. If all three columns have zero, then it means the Brand is A.
+
+### Center, Scale, KNN
+
+Next, we center and scale the data and perform KNN imputation.
+
+```{r}
+# Perform kNN imputation on columns (with scaling)
+preProcess_model <- preProcess(training_data, method = c("center", "scale", "knnImpute"))
+training_data_imputed <- predict(preProcess_model, training_data)
+```
+
+We now have zero missing values:
+
+```{r}
+colSums(is.na(training_data_imputed))
+```
+
+### Near Zero Variance predictors
+
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling.
+
+There is only one variable with near zero variance:
+
+```{r}
+colnames(training_data_imputed)[nearZeroVar(training_data_imputed)]
+```
+
+```{r}
+# Remove near-zero variance predictors
+training_data_imputed <- training_data_imputed[, -nearZeroVar(training_data_imputed)]
+
+```
+
+Our working training data-set is training_data_imputed
+
+```{r}
+head(training_data_imputed)
+```
+
+## Random Forest model
+
+Below we try fitting a random forest model to the data.
+
+One of the tuning parameters for random forests is the number of predictors, k, to choose (referred to as $m_{try}$ - it is recommended to set this parameter to one-third of the number of predictors. Number of trees is an additional parameter - it is recommended to set this to at least 1000.
+
+Below, we create a tune grid for $m_{try}$ parameter.
+
+```{r}
+mtry <- seq(from = 1, to = (ncol(training_data_imputed)-1), by = 4)
+mtry <- as.data.frame(mtry)
+```
+
+Next, we load the required parallel computing packages. We use parallel computing to reduce the run time for training the model.
+
+```{r}
+library(foreach)
+library(doParallel)
+```
+
+We create a cluster that is two less than the number of system cores.
+
+```{r}
+cluster <- makeCluster(detectCores()-2)
+```
+
+Next, we start the cluster, train the model, and close the cluster.
+
+```{r}
+registerDoParallel(cluster)
+
+set.seed(50)
+
+rf_model <- train(PH ~ ., data = training_data_imputed, method = 'rf',
+                  tuneGrid = mtry,
+                  trControl = trainControl(method = 'cv', number = 10, allowParallel = T))
+
+stopCluster(cluster)
+```
+
+```{r}
+rf_model
+```
+
+Below is a a plot of the cross-validation RMSE
+
+```{r}
+plot(rf_model)
+```
+
+Below is a plot of the variable importance:
+
+```{r}
+plot(varImp(rf_model))
+```
+
+## Boosting model
+
+Next, we try fitting a gradient boosted regression tree model to the data. The parameters for this model include tree depth, number of trees, and shrinkage parameter which controls how much of a predicted value from a previous iteration is added to the current iteration (values of \<0.01 are recommended). Lastly, the bagging fraction is kept constant at 0.5.
+
+Below, we create the tuning grid:
+
+```{r}
+gbmGrid <- expand.grid(interaction.depth = seq(1,7, by = 2),
+                       shrinkage = c(0.01,0.1),
+                       n.trees = seq(100,1000, by = 50),
+                       n.minobsinnode = seq(5,30, by = 5))
+```
+
+We will use parallel computing to reduce the training time. Below we start the cluster, train the model, and close the cluster.
+
+```{r}
+cluster2 <- makeCluster(detectCores()-2)
+```
+
+```{r}
+registerDoParallel(cluster2)
+
+set.seed(100)
+
+gbm_model <- train(PH ~ ., data = training_data_imputed, method = 'gbm',
+                  tuneGrid = gbmGrid,
+                  trControl = trainControl(method = 'cv', number = 10, allowParallel = T),
+                  verbose = F)
+
+stopCluster(cluster2)
+```
+
+```{r}
+gbm_model
+```
+
+```{r}
+plot(gbm_model)
+```
+
+Below are the parameters for the final model:
+
+```{r}
+gbm_model$bestTune
+```
+
+Below are the metrics of the final model:
+
+```{r}
+gbm_model$results[apply(gbm_model$results[,names(gbm_model$bestTune)],1,
+                        function(row) all(row==unlist(gbm_model$bestTune))),]
+```
+
+```{r}
+gbm_ntrees <- gbm_model$bestTune$n.trees
+gbm_intdepth <- gbm_model$bestTune$interaction.depth
+gbm_shrinkage <- gbm_model$bestTune$shrinkage
+gbm_node <- gbm_model$bestTune$n.minobsinnode
+
+gbm_model$results |> filter(shrinkage==gbm_shrinkage, interaction.depth == gbm_intdepth,
+                            n.minobsinnode == gbm_node, n.trees == gbm_ntrees)
+```
+
+## Test prediction
+
+Next, we try predicting the test set with the random forest model.
+
+First, we preProcess the test set:
+
+```{r}
+colSums(is.na(stu_eval_raw))
+```
+
+We will drop the PH column, since all the values are empty:
+
+```{r}
+stu_eval_raw$PH <- NULL
+```
+
+Next, we convert Brand Code to dummy variables
+
+```{r}
+stu_eval_raw$`Brand Code` <- as.factor(stu_eval_raw$`Brand Code`)
+dummy_variablesTest <- dummyVars(~., data = stu_eval_raw, fullRank = T)
+test_data <- predict(dummy_variablesTest, newdata = stu_eval_raw)
+```
+
+Next, we center, scale, and KNN impute:
+
+```{r}
+# Perform kNN imputation on columns (with scaling)
+preProcess_modelTest <- preProcess(test_data, method = c("center", "scale", "knnImpute"))
+test_data_imputed <- predict(preProcess_modelTest, test_data)
+```
+
+Next, we try predicting the test set:
+
+```{r}
+test_predict <- predict(rf_model, newdata = test_data_imputed, inverse)
+
+```
+
+Last, we convert to the original scale:
+
+```{r}
+test_predict_original_scale <- (test_predict * preProcess_model$std['PH']) + preProcess_model$mean['PH']
+```
+
+Hist:
+
+```{r}
+hist(test_predict_original_scale)
+```
