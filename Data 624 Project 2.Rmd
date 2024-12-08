@@ -60,14 +60,13 @@ print(missing_values)
 There is one character column in the data set that is separated prior to kNN imputation using the Caret::preProcess function knnImpute. This method does not support categorical columns, but we can impute this column separately. kNN imputation is performed on the numeric columns with scaling because the variables have vastly different ranges.
 
 ```{r}
-# Load necessary libraries
 library(caret)
 library(dplyr)
 library(VIM)
 
-# Separate the "Brand Code" column (categorical) and numeric data
-character_column <- stu_data_raw %>% select("Brand Code")  # Select "Brand Code"
-numeric_data <- stu_data_raw %>% select(-"Brand Code")     # Exclude "Brand Code" for numeric data
+
+character_column <- stu_data_raw %>% select("Brand Code")  
+numeric_data <- stu_data_raw %>% select(-"Brand Code")    
 
 # Perform kNN imputation on numeric columns (with scaling)
 preProcess_model <- preProcess(numeric_data, method = c("center", "scale", "knnImpute"))
@@ -90,20 +89,17 @@ The VIM::kNN function is applied to impute missing values in the Brand Code colu
 # Perform kNN imputation on the "Brand Code" column
 data_with_imputed_brand <- kNN(partial_data, variable = "Brand Code", k = 5)
 
-# Remove the extra "Brand Code_imp" column added by VIM::kNN
+# Remove the extra "Brand Code_imp" column added by kNN
 working_dataset <- data_with_imputed_brand %>% select(-`Brand Code_imp`)
 
-# Check the final dataset
 sum(is.na(working_dataset))
 ```
 
 ```{r}
-# Compare distributions of pH before and after imputation
 ggplot() +
   geom_density(data = stu_data_raw, aes(x = PH), fill = "red", alpha = 0.5) +
   geom_density(data = working_dataset, aes(x = PH), fill = "blue", alpha = 0.5) +
   labs(title = "Comparison of pH Before and After Imputation", x = "pH", y = "Density")
-
 ```
 This plot looks like there in an increase in variance after imputation, and there are unrealistic pH values. The standardization of kNN imputation may lead to difficulty interpreting predictions directly in the original scale.
 
@@ -114,10 +110,10 @@ stu_data_raw %>% count(`Brand Code`)
 ```
 It seems like the most frequent value in the 'Brand Code' column is 'B'. This is what the missing values in the column will be replaced with. The following lines define that function for the categorical variable. 
 ```{r}
-# Define the mode imputation function
+
 mode_impute <- function(x) {
-  ux <- na.omit(x)  # Remove missing values
-  ux[which.max(table(ux))]  # Return the most frequent value
+  ux <- na.omit(x) 
+  ux[which.max(table(ux))]  
 }
 ```
 
@@ -141,7 +137,7 @@ Near zero variance predictors are identified and removed from the imputed numeri
 ```{r}
 stu_data_cleaned <- stu_data_imputed[, -nearZeroVar(stu_data_imputed)]
 
-summary(stu_data_cleaned)  # Check summary statistics
+summary(stu_data_cleaned) 
 dim(stu_data_cleaned)
 ```
 
@@ -156,4 +152,57 @@ ggplot() +
 ```
 
 It seems as though using Mean Imputation best preserves the original data characteristics. We can move forward with this data set, stu_data_cleaned.
+
+
+```{r}
+# Convert the character column into dummy variables
+library(caret)
+
+dummy_model <- dummyVars(~ ., data = stu_data_cleaned, fullRank = TRUE)
+stu_data_prepped <- as.data.frame(predict(dummy_model, newdata = stu_data_cleaned))
+
+```
+
+```{r}
+set.seed(321)  
+
+index <- createDataPartition(stu_data_cleaned$PH, p = 0.8, list = FALSE)
+
+# Separate X (predictors) and Y (target) for train-test
+train_x <- stu_data_prepped[index, -which(names(stu_data_prepped) == "PH")]
+train_y <- stu_data_prepped[index, "PH"]
+test_x <- stu_data_prepped[-index, -which(names(stu_data_prepped) == "PH")]
+test_y <- stu_data_prepped[-index, "PH"]
+
+```
+
+
+```{r}
+library(caret)
+
+control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+
+svm_model <- train(
+  x = train_x, 
+  y = train_y, 
+  method = "svmRadial", 
+  tuneLength = 10,  
+  trControl = control  
+)
+
+```
+
+
+```{r}
+test_y <- as.numeric(test_y)  
+
+svm_predictions <- predict(svm_model, newdata = test_x)
+
+svm_rmse <- RMSE(svm_predictions, test_y)
+svm_r2 <- caret::R2(svm_predictions, test_y)
+
+cat("SVM RMSE:", svm_rmse, "\n")
+cat("SVM R²:", svm_r2, "\n")
+
+```
 

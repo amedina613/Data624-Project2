@@ -1,0 +1,229 @@
+---
+title: "project 2 draft"
+author: "Adriana Medina"
+date: "2024-12-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(caret)
+library(tidyverse)
+library(VIM)
+```
+
+```{r}
+library(readxl)
+library(readxl)
+library(caret)
+library(tidyverse)
+library(VIM)
+```
+
+## Import Excel tables:
+
+Below we import the excel data from Github
+
+```{r}
+stu_data_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx'
+
+dest_file_stu_data <- 'StudentData.xlsx'
+
+stu_eval_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx'
+  
+dest_file_stu_eval <- 'StudentEvaluation.xlsx'
+
+download.file(stu_data_url, dest_file_stu_data, mode = 'wb')
+download.file(stu_eval_url, dest_file_stu_eval, mode = 'wb')
+
+stu_data_raw <- read_excel('StudentData.xlsx',col_names = T)
+stu_eval_raw <- read_excel('StudentEvaluation.xlsx',col_names = T)
+
+stu_data_raw <- as.data.frame(stu_data_raw)
+stu_eval_raw <- as.data.frame(stu_eval_raw)
+```
+
+## Data Exploration:
+
+First, we check the structured of the training set.
+
+```{r}
+str(stu_data_raw)
+```
+
+Next, we check the amount of missing values in each column.
+
+```{r}
+missing_values <- colSums(is.na(stu_data_raw))
+
+print(missing_values)
+```
+
+## Data preparation
+
+### Dummy variables
+
+The Brand Code column is a categorical variable. We will have to convert it to dummy variables to perform knn imputation.
+
+First, we convert the column to a factor.
+
+```{r}
+stu_data_raw$`Brand Code` <- as.factor(stu_data_raw$`Brand Code`)
+```
+
+Next, we convert the Brand Code to dummy variables:
+
+```{r}
+dummy_variables <- dummyVars(~., data = stu_data_raw, fullRank = T)
+training_data <- predict(dummy_variables, newdata = stu_data_raw)
+```
+
+```{r}
+head(training_data)
+```
+
+We now have three dummy variable columns: Brand Code B, Brand Code C, and Brand Code D with zeros and ones. If all three columns have zero, then it means the Brand is A.
+
+### Center, Scale, KNN
+
+Next, we center and scale the data and perform KNN imputation.
+
+```{r}
+# Perform kNN imputation on columns (with scaling)
+preProcess_model <- preProcess(training_data, method = c("center", "scale", "knnImpute"))
+training_data_imputed <- predict(preProcess_model, training_data)
+```
+
+We now have zero missing values:
+
+```{r}
+colSums(is.na(training_data_imputed))
+```
+
+### Near Zero Variance predictors
+
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling.
+
+There is only one variable with near zero variance:
+
+```{r}
+colnames(training_data_imputed)[nearZeroVar(training_data_imputed)]
+```
+
+```{r}
+# Remove near-zero variance predictors
+training_data_imputed <- training_data_imputed[, -nearZeroVar(training_data_imputed)]
+
+```
+
+Our working training data-set is training_data_imputed
+
+```{r}
+head(training_data_imputed)
+```
+
+Before further analysis continues, the final data set should be
+```{r}
+training_data_imputed <- as.data.frame(training_data_imputed)
+```
+
+## Train-Test Split
+
+The data is split into 80% training and 20% testing to train and validate models. 
+```{r}
+set.seed(321)  
+
+index <- createDataPartition(training_data_imputed$PH, p = 0.8, list = FALSE)
+
+# Separate X (predictors) and Y (target) for train-test
+train_x <- training_data_imputed[index, -which(names(training_data_imputed) == "PH")]
+train_y <- training_data_imputed[index, "PH"]
+test_x <- training_data_imputed[-index, -which(names(training_data_imputed) == "PH")]
+test_y <- training_data_imputed[-index, "PH"]
+
+
+```
+
+## Model Training
+
+### Support Vector Machine (SVM)
+
+Training a non-linear SVM model to predict PH values.
+```{r}
+control <- trainControl(method = "cv", number = 5)
+
+svm_model <- train(
+  x = train_x, 
+  y = train_y, 
+  method = "svmRadial", 
+  tuneLength = 10,  
+  trControl = control  
+)
+```
+
+Predicting PH values using the trained SVM model on the test set.
+```{r}
+svm_predictions <- predict(svm_model, newdata = test_x)
+```
+Evaluate the model.
+```{r}
+svm_rmse <- RMSE(svm_predictions, test_y)
+svm_r2 <- R2(svm_predictions, test_y)
+```
+
+```{r}
+cat("SVM RMSE:", svm_rmse, "\n")
+cat("SVM R²:", svm_r2, "\n")
+```
+
+This RMSE score is high at 0.71, and the R² is 0.51 indicating there is room for improvement in the model
+
+### Ridge Regression 
+
+Training a Ridge Regression model with cross-validation to find the optimal λ (lambda) value and predict pH values.
+
+```{r}
+ridge_model <- train(
+  x = train_x, 
+  y = train_y, 
+  method = "glmnet", 
+  tuneGrid = expand.grid(alpha = 0, lambda = seq(0.001, 1, length = 20)), 
+  metric = "Rsquared",  
+  trControl = control,    
+  preProc = c("center", "scale")  
+)
+
+```
+
+Using the trained Ridge model to predict pH values for the test set.
+
+```{r}
+#  Predict and evaluate the Ridge Regression model
+ridge_predictions <- predict(ridge_model, newdata = test_x)
+```
+
+Evaluate the model
+```{r}
+ridge_rmse <- RMSE(ridge_predictions, test_y)
+ridge_r2 <- caret::R2(ridge_predictions, test_y)
+```
+
+```{r}
+cat("Ridge Regression RMSE:", ridge_rmse, "\n")
+cat("Ridge Regression R²:", ridge_r2, "\n")
+```
+
+The low R² value indicates there's still a large amount of unexplained variance.
+
+##### Model Performance Metrics
+| Model | RMSE      | R-squared | 
+|-------|-----------|-----------|
+| SVM   | 0.7115492 | 0.514247  | 
+| RIDGE | 0.8109992 | 0.3650728 | 
+
+
+
