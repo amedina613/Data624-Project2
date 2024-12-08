@@ -178,9 +178,8 @@ test_y <- stu_data_prepped[-index, "PH"]
 
 
 ```{r}
-library(caret)
 
-control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+control <- trainControl(method = "cv", number = 5)  
 
 svm_model <- train(
   x = train_x, 
@@ -199,7 +198,7 @@ test_y <- as.numeric(test_y)
 svm_predictions <- predict(svm_model, newdata = test_x)
 
 svm_rmse <- RMSE(svm_predictions, test_y)
-svm_r2 <- caret::R2(svm_predictions, test_y)
+svm_r2 <-R2(svm_predictions, test_y)
 
 cat("SVM RMSE:", svm_rmse, "\n")
 cat("SVM R²:", svm_r2, "\n")
