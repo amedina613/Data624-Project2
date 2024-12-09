@@ -1,0 +1,533 @@
+---
+title: "Data 624 Project 2"
+author: "Johnny Rodriguez"
+output:
+    html_document:
+      code_folding: hide
+      toc: true
+      toc_float: false
+      toc_depth: 5
+      number_sections: false
+      highlight: pygments
+      theme: cerulean
+date: "2024-12-07"
+---
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+</br>
+
+##### Problem Statement
+
+My leadership has told me that new regulations are requiring us to understand our manufacturing process, the predictive factors and be able to report to them our predictive model of PH.
+
+Please use the historical data set I am providing.  Build and report the factors in BOTH a technical and non-technical report.  Please provide your non-technical report in a  business friendly readable document and your predictions in an Excel readable format.   The technical report should show clearly the models you tested and how you selected your final approach.
+
+
+</br>
+
+##### Load Data
+
+```{r}
+# Read PH Training Data
+studentdata <- read.csv("https://raw.githubusercontent.com/johnnydrodriguez/Data624/refs/heads/main/StudentData.csv", header = TRUE, sep = ',', na.strings="", fill = TRUE)
+str(studentdata)
+```
+
+</br>
+
+##### Check Missing data
+
+The primary goal at this stage is to identify whether our dataset contains missing observations that could distort model training. We visualize patterns of missingness to gain understanding of the scale and structure of missing data. Detecting these gaps allows us to address them before moving to modeling steps and to reduce the risk of biased models.
+
+The missingness heatmap and the ranked bar chart show MFR has a notable amount of missing entries -- where MFR stands out with the highest number of missing values.  It could significantly affect our analysis. Brand.Code and Filler.Speed, also exhibit noticeable levels of missingness.  As these variables have a high percentage of missing data, they may influence model performance and predictions.
+
+```{r}
+library(naniar)
+vis_miss(studentdata)
+gg_miss_var(studentdata)
+```
+
+</br>
+
+##### MICE Imputation
+
+We apply Multiple Imputation by Chained Equations (MICE), to fill in missing values. MICE ensures that our final modeling dataset retains the relationships between features and yields better generalization performance.
+
+The output for MICE Imputation specifies the imputation methods assigned to each variable. Brand.Code is imputed using “polyreg”(polytomous regression)  to handle its categorical value, while most numeric variables (e.g., use “pmm” (Predictive Mean Matching). This method selection tailors the imputation process to the type and characteristics of each variable, preserving the relationships within the data.
+```{r}
+# Load library
+library(mice)
+
+# Convert Brand.Code for imputation
+studentdata$Brand.Code <- as.factor(studentdata$Brand.Code)
+
+# Generate method vector for the dataset
+imputation_methods <- make.method(studentdata)
+
+# Specify method for Brand.Code
+imputation_methods["Brand.Code"] <- "polyreg" 
+
+# Specify method for numerical columns (Predictive Mean Matching)
+numeric_columns <- names(studentdata)[sapply(studentdata, is.numeric)]
+imputation_methods[numeric_columns] <- "pmm"
+
+# Verify the methods vector
+print(imputation_methods)
+
+# Perform multiple imputations
+imputed_data <- mice(studentdata, method = imputation_methods, m = 5, seed = 321)
+
+# Extract the completed dataset
+studentdata_mice <- complete(imputed_data)
+
+```
+
+
+
+</br>
+
+
+##### Missing Data Check
+
+We verify that the dataset is now fully populated by checking for any lingering NA values. With complete data, we can move forward with modeling. The output confirms that all missing values have been successfully addressed.
+
+```{r}
+colSums(is.na(studentdata_mice)) # Counts of missing values by column
+```
+
+</br>
+
+##### Correlation Matrix: PH vs Predictors
+
+We evaluate the relationships between pH (our target) and all available predictors to gain a preliminary understanding of which factors might drive our outcome. Using correlation and visualization we identify the variables are most strongly associated with pH. 
+
+The table of correlations ranks predictors based on their correlation with the target variable, pH. Mnf.Flow shows the strongest relationship with pH (negative correlation of -0.445),  Bowl.Setpoint (positive correlation of 0.346) is has the strongest positive correlation and may indicate a role in influencing pH -- although these correlations are moderate at best.
+
+
+```{r}
+# Load libraries
+library(GGally)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+
+# Prepare the data for correlation analysis
+cor_data <- studentdata_mice %>%
+    select_if(is.numeric)
+
+# Compute correlations between 'PH' and all other predictors
+correlation_values <- cor_data %>%
+    summarise(across(.cols = everything(), 
+                     .fns = ~ cor(., cor_data$PH, use = "complete.obs"), 
+                     .names = "cor_{col}")) %>%
+    pivot_longer(cols = everything(), names_to = "Predictor", values_to = "Correlation") %>%
+    mutate(Predictor = gsub("cor_", "", Predictor)) %>%
+    filter(Predictor != "PH") %>% 
+    arrange(desc(abs(Correlation)))
+
+# Output sorted list of correlations
+print(correlation_values)
+
+# Create scatterplot matrix for PH against other predictors
+correlation_matrix <- ggpairs(
+  data = cor_data,
+  columns = which(names(cor_data) == "PH"):ncol(cor_data),
+  upper = list(continuous = wrap("cor", size = 3)),  # Add correlation values
+  title = "Correlation Scatterplot Matrix for PH") +
+  theme(
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    strip.text = element_text(size = 7),
+    plot.title = element_text(size = 12))
+
+# Display the scatterplot matrix
+print(correlation_matrix)
+```
+
+</br>
+
+##### Baseline: Ordinary Linear Regression with Highest Correlated Predictors
+
+We begin our modeling exploration with a simple linear regression, focused on the top predictors identified in the correlation analysis. We fit and visualize straightforward models to see how well a single predictor explains pH variance. The baseline helps us understand whether simple relationships exist and serves as a reference point for improvement. Although we do not expect this simple model to be the best, it provides a clear benchmark for gauging progress.
+
+Bowl.Setpoint has slight upward trend in pH as the setpoint increases, with an adjusted R-squared of 0.119. This suggests that Bowl.Setpoint explains approximately 11.9% of the variance in pH.  Mnf.Flow has a negative slope association, showing that pH decreases as Mnf.Flow increases, with a higher adjusted R-squared of 0.198.
+
+Mnf.Flow is a stronger predictor of pH than Bowl.Setpoint but both are relatives weak predictors for pH. Their low R-squared values point to using additional predictors or more complex models to capture the remaining variance.
+
+```{r}
+
+# Load library
+library(ggplot2)
+
+# Scatterplot with regression line for PH vs. Bowl.Setpoint
+plot_bowl <- ggplot(studentdata_mice, aes(x = Bowl.Setpoint, y = PH)) +
+  geom_point(color = "blue", alpha = 0.6) +  # Scatterplot points
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Scatterplot of PH vs. Bowl.Setpoint",
+    x = "Bowl Setpoint",
+    y = "PH") +
+  theme_minimal()
+
+# Scatterplot with regression line for PH vs. Mnf.Flow
+plot_flow <- ggplot(studentdata_mice, aes(x = Mnf.Flow, y = PH)) +
+  geom_point(color = "green", alpha = 0.6) +  # Scatterplot points
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Scatterplot of PH vs. Mnf.Flow",
+    x = "Mnf.Flow",
+    y = "PH") +
+  theme_minimal()
+
+# Display the plots
+print(plot_bowl)
+print(plot_flow)
+
+
+# Linear model for PH and Bowl.Setpoint
+model_bowl <- lm(PH ~ Bowl.Setpoint, data = studentdata_mice)
+summary(model_bowl)
+
+# Linear model for PH and Pressure.Setpoint
+model_flow <- lm(PH ~ Mnf.Flow, data = studentdata_mice)
+summary(model_flow)
+```
+
+
+</br>
+
+##### Baseline: Multiple Linear Regression
+
+We expand from a single predictor to a full multiple linear regression model that incorporates all potential factors. We examine model summaries and diagnostic plots to assess fit and identify potential issues like non-linearity or heteroskedasticity.
+
+The multiple linear regression model results an adjusted R-squared value of 0.4072; the model explains approximately 40.7% of the variance in pH. Significant predictors include Mnf.Flow (negative association), Carb.Pressure1 (positive association), Hyd.Pressure3, Temperature, Usage.cont, Balling and other as indicated by p values,  Several predictors, such as Carb.Volume and Hyd.Pressure4, are not significant and may add unnecessary complexity to the model.
+
+The Residuals vs Fitted plot shows a reasonably random spread, suggesting linearity and homoscedasticity. The Q-Q plot suggests most residuals are normally distributed, with some deviation in the tails. The Scale-Location plot supports a relatively even variance across fitted values. The Residuals vs Leverage plot highlights a few influential points (e.g., observation 1094), which may warrant further treatment.
+
+
+```{r}
+# Load libraries
+library(ggplot2)
+library(car)
+library(lmtest)
+library(GGally)
+
+# Multiple linear regression model
+model <- lm(PH ~ ., data = studentdata_mice)
+summary(model)
+
+#Diagnostic Plots
+par(mfrow = c(2, 2))
+plot(model)
+
+```
+
+</br>
+
+##### Baseline: MLR without Multicolinear Predictors
+
+Due to the potential issues introduced by multiple predictors, we use the Variance Inflation Factor to detect and remove variables that cause multicollinearity. After pruning these collinear variables, we refit the model.  By mitigating multicollinearity, we ensure that each predictor contributes distinct information about pH. After removing predictors with high multicollinearity, the remaining predictors have low VIF values - all less than 5.
+
+This refined model has an adjusted R-squared of 0.3003,lower than the full MLR model. The results suggest that some variables remain non-significant and could potentially be excluded but the drop in R Square value indicate the the excluded predictors offer explanatory power of the variance.
+
+The diagnostic plots show similar trends to the previous MLR model, with the Residuals vs Fitted plot displaying a random spread, suggesting linearity. The Q-Q plot indicates a relatively normal distribution of residuals with some deviations in the tails. The Scale-Location plot suggests variance homogeneity. Residuals vs Leverage plot identifies a few influential points (e.g., observation 1094), which may need attention.
+
+
+```{r}
+# Load library
+library(car)
+
+# Compute VIF values
+vif_df <- as.data.frame(vif(model))
+names(vif_df) <- "VIF"
+vif_df$Predictor <- rownames(vif_df)
+
+# Filter predictors with VIF <= 5 
+predictors_to_keep <- vif_df$Predictor[vif_df$VIF <= 5]
+
+# Create a new formula with the filtered predictors
+formula <- as.formula(paste("PH ~", paste(predictors_to_keep, collapse = " + ")))
+
+# Refit the model using only the selected predictors
+final_model <- lm(formula, data = studentdata_mice)
+
+# Compute VIF values for the final model and store them in a dataframe
+final_vif_df <- as.data.frame(vif(final_model))
+names(final_vif_df) <- "VIF"
+final_vif_df$Predictor <- rownames(final_vif_df)
+
+# Display VIF values for all predictors
+print(vif_df)
+
+# Display VIF values for kept predictors
+print(final_vif_df)
+
+# Display the summary of the final model
+print(summary(final_model))
+
+# Generate diagnostic plots for the final model
+par(mfrow = c(2, 2))
+plot(final_model)
+
+```
+
+
+</br>
+
+##### Lasso Regression
+
+We model a Lasso regression to leverage its feature selection, model complexity reduction attributes.  Lasso applies a penalty to shrink less important coefficients toward zero resulting in smaller set non-zero important features . By focusing on the most critical variables, we may be able to generate a parsimonious model that may outperform our linear regression baselines.
+
+The Lasso regression results reveal a tuned model with optimal parameters: alpha = 0.1 and lambda = 0.0012, The variable importance rankings highlight Oxygen.Filler as the most influential predictor, followed by Carb.Rel, PC.Volume, and Density. These top features identify key predictors of pH.
+
+The Lasso regression achieves effective dimensionality reduction but te relatively modest R-squared value suggests that further exploration may be necessary. The R-squared of 0.354 is lower than the adjusted R-squared of 0.4072 from the multiple linear regression (MLR) model and may not be a suitable model for this dataset.
+
+```{r}
+# Load libraries
+library(caret)
+library(glmnet)
+
+# Set the seed
+set.seed(321)
+
+# Split the data into training and test sets
+set.seed(123)
+train_indices <- createDataPartition(studentdata_mice$PH, p = 0.8, list = FALSE)
+train_data <- studentdata_mice[train_indices, ]
+test_data <- studentdata_mice[-train_indices, ]
+
+# Prepare the data for Lasso regression
+x_train <- as.matrix(train_data[, -which(names(train_data) == "PH")])
+y_train <- train_data$PH
+x_test <- as.matrix(test_data[, -which(names(test_data) == "PH")])
+y_test <- test_data$PH
+
+# Define cross-validation method
+cross_val_10 <- trainControl(method = "cv", number = 10)
+
+# Train the Lasso regression model
+lasso_model <- train(
+  x = x_train,
+  y = y_train,
+  method = "glmnet",
+  trControl = cross_val_10,
+  preProcess = c("center", "scale", "nzv"),
+  tuneLength = 20)
+
+# Extract optimal lambda from cross-validation
+lasso_best_lambda <- lasso_model$bestTune
+print(lasso_best_lambda)
+
+# Compute the best cross-validated R-squared
+lasso_best_r2 <- max(lasso_model$results$Rsquared, na.rm = TRUE)
+print(lasso_best_r2)
+
+# Predict on the test set and compute R-squared
+lasso_pred <- predict(lasso_model, newdata = x_test)
+test_r2 <- postResample(pred = lasso_pred, obs = y_test)[2]
+print(test_r2)
+
+# Display variable importance
+lasso_var_importance <- varImp(lasso_model)
+print(lasso_var_importance)
+
+# Plot variable importance
+plot(
+  lasso_var_importance,
+  main = "Lasso Variable Importance",
+  cex.main = 0.7,
+  cex.axis = 0.7, 
+  cex.lab = 0.7)
+
+# Plot tuning results
+plot(
+  lasso_model,
+  main = "Lasso Tuning Results (Lambda vs R2)",
+  cex.main = 0.7,
+  cex.axis = 0.7,
+  cex.lab = 0.7)
+
+```
+
+
+</br>
+
+
+
+##### Neural Network
+
+To capture non-linear and potentially complex relationships, we train a neural network model.
+
+The neural network model achieves an R-squared of 0.477, surpassing the performance of the Lasso regression (R-squared = 0.354) and coming close to the multiple linear regression (MLR) model’s R-squared of 0.407. The optimal parameters are size = 9 (number of hidden units) and decay = 0.5 (regularization parameter). Overall, the neural network model has a moderate results.
+
+The tuning results graph shows that the combination of decay and hidden units significantly impacts model performance, with RMSE values improving as the decay and size are fine-tuned. The variable importance plot highlights Carb.Flow, Hyd.Pressure1, and Mnf.Flow as key predictors.
+
+The residual plot suggests minimal systematic errors, with residuals centered around zero across predicted values.
+```{r}
+# Load libraries
+library(caret)
+library(nnet)
+library(dplyr)
+
+# Convert 'Brand,Code' to dummy variable
+studentdata_processed <- studentdata_mice %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  dummyVars(" ~ .", data = .) %>%
+  predict(., studentdata_mice) %>%
+  as.data.frame()
+
+# Split data into training and test sets
+set.seed(321) 
+trainIndex <- createDataPartition(studentdata_processed$PH, p = 0.80, list = FALSE)
+trainData <- studentdata_processed[trainIndex, ]
+testData <- studentdata_processed[-trainIndex, ]
+
+# Separate predictors and outcome for training and test sets
+x_train <- trainData[, !names(trainData) %in% "PH"]
+y_train <- trainData$PH
+x_test <- testData[, !names(testData) %in% "PH"]
+y_test <- testData$PH
+
+# Define a tuning grid
+nnetGrid <- expand.grid(
+  size = 1:10,
+  decay = c(0.001, 0.01, 0.1, 0.5))
+
+# Train neural network
+set.seed(321)
+nnetTuned <- train(
+  x = x_train,
+  y = y_train,
+  method = "nnet",
+  tuneGrid = nnetGrid,
+  preProcess = c("center", "scale"),
+  trControl = trainControl(method = "cv", number = 10),
+  linout = TRUE,
+  trace = FALSE,
+  maxit = 500,
+  MaxNWts = 10 * (ncol(x_train) + 1) + 10 + 1)
+
+# View model results
+print(nnetTuned)
+print(nnetTuned$bestTune)
+
+# Plot tuning results
+plot(nnetTuned, main = "Tuning Results for Neural Network")
+
+# Variable importance
+varImpPlot <- varImp(nnetTuned)
+plot(varImpPlot, main = "Variable Importance from Neural Network")
+
+# Predict on the test set
+nnetPred <- predict(nnetTuned, newdata = x_test)
+
+# Evaluate model performance
+performance <- postResample(pred = nnetPred, obs = y_test)
+print(performance)
+
+# Residual diagnostic plot
+residuals <- y_test - nnetPred
+plot(nnetPred, residuals, xlab = "Predicted Values", ylab = "Residuals",
+     main = "Residual Plot", col = "blue", pch = 19)
+abline(h = 0, col = "red", lwd = 2)
+```
+
+
+</br>
+
+##### XGBoost Tree
+
+We train a gradient-boosted decision tree model using the xgboost package. We also extract feature importance rankings.
+
+The XGBoost model achieves an R-squared of 0.601, significantly outperforming the previous models, including the neural network (R-squared = 0.477) and multiple linear regression (R-squared = 0.407).
+
+The residual plot shows a good distribution of residuals around zero across the predicted values, indicating a well-fitted model with minimal systematic errors. The feature importance chart indicates Mnf.Flow as the most influential predictor, followed by Oxygen.Filler, Filler.Speed, and Alch.Rel, as predictors of PH.
+
+```{r}
+# Load libraries
+library(xgboost)
+library(dplyr)
+
+# Preprocess the data (convert categorical to dummy)
+studentdata_processed <- studentdata_mice %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  dummyVars(" ~ .", data = .) %>%
+  predict(., studentdata_mice) %>%
+  as.data.frame()
+
+# Split into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(studentdata_processed$PH, p = 0.80, list = FALSE)
+trainData <- studentdata_processed[trainIndex, ]
+testData <- studentdata_processed[-trainIndex, ]
+
+# Separate predictors and outcome
+x_train <- as.matrix(trainData[, !names(trainData) %in% "PH"])
+y_train <- trainData$PH
+x_test <- as.matrix(testData[, !names(testData) %in% "PH"])
+y_test <- testData$PH
+
+# Convert training data to DMatrix for XGBoost
+dtrain <- xgb.DMatrix(data = x_train, label = y_train)
+dtest <- xgb.DMatrix(data = x_test, label = y_test)
+
+# Set parameters for XGBoost
+params <- list(
+  booster = "gbtree",
+  objective = "reg:squarederror",
+  eta = 0.1,
+  max_depth = 6,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  gamma = 0)
+
+# Train XGBoost model
+set.seed(123)
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 200,
+  watchlist = list(train = dtrain, test = dtest),
+  early_stopping_rounds = 10,
+  print_every_n = 10)
+
+# Predict on test data
+predictions <- predict(xgb_model, newdata = dtest, iteration_range = c(1, xgb_model$best_iteration))
+
+# Evaluate performance
+rsq <- cor(y_test, predictions)^2
+cat("R-squared:", rsq, "\n")
+
+# Residual plot
+residuals <- y_test - predictions
+plot(predictions, residuals, xlab = "Predicted", ylab = "Residuals",
+     main = "Residual Plot for XGBoost", col = "blue", pch = 19)
+abline(h = 0, col = "red", lwd = 2)
+
+# Variable importance plot
+importance <- xgb.importance(feature_names = colnames(x_train), model = xgb_model)
+xgb.plot.importance(importance, main = "Feature Importance for XGBoost")
+```
+
+</br>
+
+##### Final Model Results and Model Selection
+
+Based on the final RSquared results, the Random Forest model is the best predictor with Rsq = 0.7130620.  This model will be used to predict the Student Evaluation dataset.  The Random Forest model provides the highest explanatory power, capturing a significant proportion of the variance in the target variable (pH). Its ensemble nature enables it to handle non-linear relationships and complex interactions between predictors effectively in this dataset.
+
+
+| Model   |R-squared  |
+|---------|-----------|
+| OLR     |0.198      |
+| MLR     |0.4072     |
+| LASSO   |0.3542227  |
+| NNET    |0.47670903 |
+| XGB     |0.6011627  |
+| RIDGE   |0.3650728  |
+| SVM     |0.514247   |
+| RFOREST |0.7130620  |
+| BOOSTED |0.6468105  |
