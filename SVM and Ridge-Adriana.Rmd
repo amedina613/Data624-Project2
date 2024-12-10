@@ -1,5 +1,5 @@
 ---
-title: "project 2 draft"
+title: "SVM and Ridge- Adriana"
 author: "Adriana Medina"
 date: "2024-12-04"
 output: html_document
