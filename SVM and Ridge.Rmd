@@ -16,14 +16,6 @@ library(tidyverse)
 library(VIM)
 ```
 
-```{r}
-library(readxl)
-library(readxl)
-library(caret)
-library(tidyverse)
-library(VIM)
-```
-
 ## Import Excel tables:
 
 Below we import the excel data from Github
@@ -93,7 +85,6 @@ We now have three dummy variable columns: Brand Code B, Brand Code C, and Brand 
 Next, we center and scale the data and perform KNN imputation.
 
 ```{r}
-# Perform kNN imputation on columns (with scaling)
 preProcess_model <- preProcess(training_data, method = c("center", "scale", "knnImpute"))
 training_data_imputed <- predict(preProcess_model, training_data)
 ```
@@ -115,7 +106,6 @@ colnames(training_data_imputed)[nearZeroVar(training_data_imputed)]
 ```
 
 ```{r}
-# Remove near-zero variance predictors
 training_data_imputed <- training_data_imputed[, -nearZeroVar(training_data_imputed)]
 
 ```
@@ -139,7 +129,6 @@ set.seed(321)
 
 index <- createDataPartition(training_data_imputed$PH, p = 0.8, list = FALSE)
 
-# Separate X (predictors) and Y (target) for train-test
 train_x <- training_data_imputed[index, -which(names(training_data_imputed) == "PH")]
 train_y <- training_data_imputed[index, "PH"]
 test_x <- training_data_imputed[-index, -which(names(training_data_imputed) == "PH")]
