@@ -96,7 +96,7 @@ studentdata_mice <- complete(imputed_data)
 We verify that the dataset is now fully populated by checking for any lingering NA values. With complete data, we can move forward with modeling. The output confirms that all missing values have been successfully addressed.
 
 ```{r}
-colSums(is.na(studentdata_mice)) # Counts of missing values by column
+colSums(is.na(studentdata_mice))
 ```
 
 </br>
@@ -136,7 +136,7 @@ print(correlation_values)
 correlation_matrix <- ggpairs(
   data = cor_data,
   columns = which(names(cor_data) == "PH"):ncol(cor_data),
-  upper = list(continuous = wrap("cor", size = 3)),  # Add correlation values
+  upper = list(continuous = wrap("cor", size = 3)),
   title = "Correlation Scatterplot Matrix for PH") +
   theme(
     axis.text.x = element_text(size = 7),
@@ -165,7 +165,7 @@ library(ggplot2)
 
 # Scatterplot with regression line for PH vs. Bowl.Setpoint
 plot_bowl <- ggplot(studentdata_mice, aes(x = Bowl.Setpoint, y = PH)) +
-  geom_point(color = "blue", alpha = 0.6) +  # Scatterplot points
+  geom_point(color = "blue", alpha = 0.6) +
   geom_smooth(method = "lm", color = "red", se = TRUE) +
   labs(
     title = "Scatterplot of PH vs. Bowl.Setpoint",
@@ -175,7 +175,7 @@ plot_bowl <- ggplot(studentdata_mice, aes(x = Bowl.Setpoint, y = PH)) +
 
 # Scatterplot with regression line for PH vs. Mnf.Flow
 plot_flow <- ggplot(studentdata_mice, aes(x = Mnf.Flow, y = PH)) +
-  geom_point(color = "green", alpha = 0.6) +  # Scatterplot points
+  geom_point(color = "green", alpha = 0.6) +
   geom_smooth(method = "lm", color = "red", se = TRUE) +
   labs(
     title = "Scatterplot of PH vs. Mnf.Flow",
