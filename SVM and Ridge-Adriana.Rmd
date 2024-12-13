@@ -41,7 +41,7 @@ stu_eval_raw <- as.data.frame(stu_eval_raw)
 
 ## Data Exploration:
 
-First, we check the structured of the training set.
+First, we check the structured of the training set. Understanding the structure of the data and the amount of missing values helps us identify potential issues in the dataset, such as variables with missing or incomplete data, and decide how to handle them.
 
 ```{r}
 str(stu_data_raw)
@@ -59,7 +59,7 @@ print(missing_values)
 
 ### Dummy variables
 
-The Brand Code column is a categorical variable. We will have to convert it to dummy variables to perform knn imputation.
+The Brand Code column is a categorical variable. We will have to convert it to dummy variables to represent the categories numerically and to perform knn imputation.
 
 First, we convert the column to a factor.
 
@@ -97,7 +97,7 @@ colSums(is.na(training_data_imputed))
 
 ### Near Zero Variance predictors
 
-Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling.
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling. Identifying and removing them helps improve model performance by reducing overfitting.
 
 There is only one variable with near zero variance:
 
@@ -213,6 +213,7 @@ The low R² value indicates there's still a large amount of unexplained variance
 |-------|-----------|-----------|
 | SVM   | 0.7115492 | 0.514247  | 
 | RIDGE | 0.8109992 | 0.3650728 | 
+
 
 
 
