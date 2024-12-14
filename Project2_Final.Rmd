@@ -1,0 +1,749 @@
+---
+title: "DATA 624 Project 2 - Final"
+author: "Adriana Medina, Johnny Rodriguez, Semyon Toybis"
+output:
+    html_document:
+      code_folding: hide
+      toc: true
+      toc_float: false
+      toc_depth: 5
+      number_sections: false
+      highlight: pygments
+      theme: cerulean
+date: "2024-12-11"
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(readxl)
+library(caret)
+library(tidyverse)
+library(VIM)
+library(ggplot2)
+library(GGally)
+library(car)
+library(glmnet)
+
+```
+
+## Abstract
+
+We are tasked with with analyzing the manufacturing process of a beverage company, ABC Beverage. Specifically, we are tasked with analyzing what factors in the process can help us predict the PH of a beverage.
+
+We train a variety of machine learning models including linear models, nonlinear models, and regression tree/rule based models. We found that a random forest model was best able to explain the variance in PH based on the predictive factors. We use the random forest model to predict PH for a subsequent data set that was excluded from training and testing.
+
+## Import Excel tables
+
+Below we import the excel data from Github:
+
+```{r}
+stu_data_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentData.xlsx'
+
+dest_file_stu_data <- 'StudentData.xlsx'
+
+stu_eval_url <- 'https://github.com/amedina613/Data624-Project2/raw/refs/heads/main/StudentEvaluation.xlsx'
+  
+dest_file_stu_eval <- 'StudentEvaluation.xlsx'
+
+download.file(stu_data_url, dest_file_stu_data, mode = 'wb')
+download.file(stu_eval_url, dest_file_stu_eval, mode = 'wb')
+
+stu_data_raw <- read_excel('StudentData.xlsx',col_names = T)
+stu_eval_raw <- read_excel('StudentEvaluation.xlsx',col_names = T)
+
+
+stu_data_raw <- as.data.frame(stu_data_raw)
+stu_eval_raw <- as.data.frame(stu_eval_raw)
+```
+
+Stu_data_raw is the data that we will use to train and test models. Stu_eval_raw is the data set for which we will predict PH values using our chosen model.
+
+## Data exploration
+
+First, we check the structure of the data set we will use to train and test the model.
+
+```{r}
+str(stu_data_raw)
+```
+
+Next, we check the amount of missing values in each column.
+
+```{r}
+missing_values <- colSums(is.na(stu_data_raw))
+
+print(missing_values)
+```
+
+We also visualize missing data:
+
+```{r}
+library(naniar)
+gg_miss_var(stu_data_raw)
+```
+
+```{r}
+vis_miss(stu_data_raw)
+```
+
+## Data preparation
+
+### Dummy variables
+
+The Brand Code column is a categorical variable. We will have to convert it to dummy variables to perform KNN imputation.
+
+First, we convert the column to a factor.
+
+```{r}
+stu_data_raw$`Brand Code` <- as.factor(stu_data_raw$`Brand Code`)
+```
+
+Next, we impute the Brand Code to replace missing values:
+
+```{r}
+library(VIM)
+
+
+stu_data_raw <- kNN(data = stu_data_raw, variable = 'Brand Code', k = 5, imp_var = F)
+```
+
+Next, we convert the Brand Code to dummy variables:
+
+```{r}
+dummy_variables <- dummyVars(~., data = stu_data_raw, fullRank = T)
+training_data <- predict(dummy_variables, newdata = stu_data_raw)
+```
+
+```{r}
+head(training_data)
+```
+
+We now have three dummy variable columns: Brand Code B, Brand Code C, and Brand Code D with zeros and ones. If all three columns have zero, then it means the Brand is A.
+
+### Center, Scale, KNN
+
+Next, we center and scale the data and perform KNN imputation for missing values. We exclude the dummy variable columns from centering, scaling, and imputation (Brand Code was already imputed).
+
+```{r}
+preProcess_model <- preProcess(training_data[,4:35], method = c("center", "scale", "knnImpute"))
+training_data_imputed <- training_data
+training_data_imputed[,4:35] <- predict(preProcess_model, training_data[,4:35])
+```
+
+We now have zero missing values:
+
+```{r}
+colSums(is.na(training_data_imputed))
+```
+
+### Near Zero Variance predictors
+
+Near zero variance predictors are identified and removed from the imputed numeric data set. These predictors have little variability and do not contribute meaningfully to analysis or modeling.
+
+There is only one variable with near zero variance:
+
+```{r}
+colnames(training_data_imputed)[nearZeroVar(training_data_imputed)]
+```
+
+```{r}
+training_data_imputed <- training_data_imputed[, -nearZeroVar(training_data_imputed)]
+
+```
+
+Our working training data-set is training_data_imputed
+
+```{r}
+head(training_data_imputed)
+```
+
+Before further analysis continues, we convert the data set into a data frame:
+
+```{r}
+training_data_imputed <- as.data.frame(training_data_imputed)
+```
+
+### Train-Test Split
+
+The data is split into 80% training and 20% testing to train and validate models.
+
+```{r}
+set.seed(321)  
+
+index <- createDataPartition(training_data_imputed$PH, p = 0.8, list = FALSE)
+
+train_x <- training_data_imputed[index, -which(names(training_data_imputed) == "PH")]
+train_y <- training_data_imputed[index, "PH"]
+test_x <- training_data_imputed[-index, -which(names(training_data_imputed) == "PH")]
+test_y <- training_data_imputed[-index, "PH"]
+
+
+```
+
+## Correlation matrix: PH vs predictors
+
+We evaluate the relationships between pH (our target) and all available predictors to gain a preliminary understanding of which factors might drive our outcome. Using correlation and visualization we identify the variables that are most strongly associated with pH.
+
+The table of correlations ranks predictors based on their correlation with the target variable, pH. Mnf.Flow shows the strongest relationship with pH (negative correlation of -0.445), Bowl.Setpoint (positive correlation of 0.346) is has the strongest positive correlation and may indicate a role in influencing pH -- although these correlations are moderate at best.
+
+```{r, message=FALSE}
+
+# Compute correlations between 'PH' and all other predictors
+correlation_values <- training_data_imputed %>%
+    summarise(across(.cols = everything(), 
+                     .fns = ~ cor(., training_data_imputed$PH, use = "complete.obs"), 
+                     .names = "cor_{col}")) %>%
+    pivot_longer(cols = everything(), names_to = "Predictor", values_to = "Correlation") %>%
+    mutate(Predictor = gsub("cor_", "", Predictor)) %>%
+    filter(Predictor != "PH") %>% 
+    arrange(desc(abs(Correlation)))
+
+# Output sorted list of correlations
+print(correlation_values)
+
+# Create scatterplot matrix for PH against other predictors
+correlation_matrix <- ggpairs(
+  data = training_data_imputed,
+  columns = which(names(training_data_imputed) == "PH"):ncol(training_data_imputed),
+  upper = list(continuous = wrap("cor", size = 3)),
+  title = "Correlation Scatterplot Matrix for PH") +
+  theme(
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    strip.text = element_text(size = 7),
+    plot.title = element_text(size = 12))
+
+# Display the scatterplot matrix
+print(correlation_matrix)
+```
+
+##### Baseline: Ordinary Linear Regression with Highest Correlated Predictors
+
+We begin our modeling exploration with a simple linear regression, focused on the top predictors identified in the correlation analysis. We fit and visualize straightforward models to see how well a single predictor explains pH variance. The baseline helps us understand whether simple relationships exist and serves as a reference point for improvement. Although we do not expect this simple model to be the best, it provides a clear benchmark for gauging progress.
+
+Bowl.Setpoint has slight upward trend in pH as the setpoint increases, with an adjusted R-squared of 0.119. This suggests that Bowl Setpoint explains approximately 12.2% of the variance in pH. Mnf Flow has a negative slope association, showing that pH decreases as Mnf Flow increases, with a higher adjusted R-squared of 0.1995.
+
+Mnf Flow is a stronger predictor of pH than Bowl Setpoint but both are relatively weak predictors for pH. Their low R-squared values point to using additional predictors or more complex models to capture the remaining variance.
+
+```{r}
+
+# Scatterplot with regression line for PH vs. Bowl Setpoint
+plot_bowl <- ggplot(stu_data_raw, aes(x = `Bowl Setpoint`, y = PH)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Scatterplot of PH vs. Bowl Setpoint",
+    x = "Bowl Setpoint",
+    y = "PH") +
+  theme_minimal()
+
+# Scatterplot with regression line for PH vs. Mnf Flow
+plot_flow <- ggplot(stu_data_raw, aes(x = `Mnf Flow`, y = PH)) +
+  geom_point(color = "green", alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  labs(
+    title = "Scatterplot of PH vs. Mnf.Flow",
+    x = "Mnf Flow",
+    y = "PH") +
+  theme_minimal()
+
+# Display the plots
+print(plot_bowl)
+print(plot_flow)
+
+
+# Linear model for PH and Bowl Setpoint
+model_bowl <- lm(PH ~ `Bowl Setpoint`, data = stu_data_raw)
+summary(model_bowl)
+
+# Linear model for PH and Mnf Flow
+model_flow <- lm(PH ~ `Mnf Flow`, data = stu_data_raw)
+summary(model_flow)
+```
+
+##### Baseline: Multiple Linear Regression
+
+We expand from a single predictor to a full multiple linear regression model that incorporates all potential factors. We examine model summaries and diagnostic plots to assess fit and identify potential issues like non-linearity or heteroskedasticity.
+
+The multiple linear regression model results an adjusted R-squared value of 0.44; the model explains approximately 44% of the variance in pH. Significant predictors include Mnf.Flow (negative association), Carb.Pressure1 (positive association), Hyd.Pressure3, Temperature, Usage.cont, Balling and others as indicated by extremely low p values, Several predictors, such as PC Volume and Hyd.Pressure4, are not significant and may add unnecessary complexity to the model.
+
+The Residuals vs Fitted plot shows a reasonably random spread, suggesting linearity and homoscedasticity. The Q-Q plot suggests most residuals are normally distributed, with some deviation in the tails. The Scale-Location plot supports a relatively even variance across fitted values. The Residuals vs Leverage plot highlights a few influential points (e.g., observation 172), which may warrant further treatment.
+
+```{r}
+# Multiple linear regression model
+model <- lm(PH ~ ., data = stu_data_raw)
+summary(model)
+
+# Diagnostic Plots
+par(mfrow = c(2, 2))
+plot(model)
+
+```
+
+##### Baseline: MLR without Multicolinear Predictors
+
+Due to the potential issues introduced by multiple predictors, we use the Variance Inflation Factor to detect and remove variables that cause multicollinearity. After pruning these collinear variables, we refit the model. By mitigating multicollinearity, we ensure that each predictor contributes distinct information about pH. After removing predictors with high multicollinearity, the remaining predictors have low VIF values - all less than 5.
+
+This refined model has an adjusted R-squared of 0.31, lower than the full MLR model. The results suggest that some variables remain non-significant and could potentially be excluded but the drop in R Square value indicate the the excluded predictors offer explanatory power of the variance.
+
+The diagnostic plots show similar trends to the previous MLR model, with the Residuals vs Fitted plot displaying a random spread, suggesting linearity. The Q-Q plot indicates a relatively normal distribution of residuals with some deviations in the tails. The Scale-Location plot suggests variance homogeneity. Residuals vs Leverage plot identifies a few influential points (e.g., observation 1094), which may need attention.
+
+```{r}
+
+# Compute VIF values
+vif_df <- as.data.frame(vif(model))
+names(vif_df) <- "VIF"
+vif_df$Predictor <- rownames(vif_df)
+
+# Filter predictors with VIF <= 5 
+predictors_to_keep <- vif_df$Predictor[vif_df$VIF <= 5]
+
+# Create formula with the filtered predictors
+formula <- as.formula(paste("PH ~", paste(predictors_to_keep, collapse = " + ")))
+
+# Refit model using selected predictors
+final_model <- lm(formula, data = stu_data_raw)
+
+# Compute VIF values for the final model
+final_vif_df <- as.data.frame(vif(final_model))
+names(final_vif_df) <- "VIF"
+final_vif_df$Predictor <- rownames(final_vif_df)
+
+# Display VIF values for kept predictors
+print(final_vif_df)
+
+# Display the summary of the final model
+print(summary(final_model))
+
+# Diagnostic plots for the final model
+par(mfrow = c(2, 2))
+plot(final_model)
+
+```
+
+## Model Training
+
+Given the relatively low r-squared values from linear regression models, we fit a variety of models below to see if these models are better able to explain the variance in pH based on the predictors.
+
+### Support Vector Machine (SVM)
+
+Training a non-linear SVM model to predict PH values.
+
+```{r}
+control <- trainControl(method = "cv", number = 5)
+
+set.seed(123)
+
+svm_model <- train(
+  x = train_x, 
+  y = train_y, 
+  method = "svmRadial", 
+  tuneLength = 10,  
+  trControl = control  
+)
+```
+
+```{r}
+plot(svm_model)
+```
+
+```{r}
+plot(varImp(svm_model))
+```
+
+Predicting PH values using the trained SVM model on the test set.
+
+```{r}
+svm_predictions <- predict(svm_model, newdata = test_x)
+```
+
+We compare the predictions with the actual test set values to evaluate the model:
+
+```{r}
+postResample(pred = svm_predictions, obs = test_y)
+```
+
+This RMSE score is high at 0.71, and the R² is 0.52 indicating there is room for improvement in the model
+
+### Ridge Regression
+
+Training a Ridge Regression model with cross-validation to find the optimal λ (lambda) value and predict pH values.
+
+```{r}
+
+set.seed(345)
+
+ridge_model <- train(
+  x = train_x, 
+  y = train_y, 
+  method = "glmnet", 
+  tuneGrid = expand.grid(alpha = 0, lambda = seq(0.001, 1, length = 20)), 
+  metric = "RMSE",  
+  trControl = control,    
+  preProc = c("center", "scale")  
+)
+
+```
+
+```{r}
+plot(ridge_model)
+```
+
+```{r}
+plot(varImp(ridge_model))
+```
+
+Using the trained Ridge model to predict pH values for the test set.
+
+```{r}
+#  Predict and evaluate the Ridge Regression model
+ridge_predictions <- predict(ridge_model, newdata = test_x)
+```
+
+Evaluate the model:
+
+```{r}
+postResample(pred = ridge_predictions, obs = test_y)
+```
+
+The low R² value indicates there's still a large amount of unexplained variance.
+
+### Lasso
+
+We fit a Lasso regression model to leverage its feature selection and model complexity reduction attributes. Lasso applies a penalty to shrink less important coefficients toward zero resulting in smaller set of non-zero important features . By focusing on the most critical variables, we may be able to generate a parsimonious model that may outperform our linear regression baselines.
+
+The Lasso regression results reveal a tuned model with optimal parameters: alpha = 0.2 and lambda = 0.004, The variable importance rankings highlight Oxygen.Filler as the most influential predictor, followed by Carb.Rel, PC.Volume, and Density. These top features identify key predictors of pH.
+
+```{r}
+set.seed(321)
+
+#Define cross-validation method
+cross_val_10 <- trainControl(method = "cv", number = 10)
+
+lasso_model <- train(
+  x = train_x,
+  y = train_y,
+  method = "glmnet",
+  trControl = cross_val_10,
+  tuneLength = 20)
+
+```
+
+```{r}
+plot(lasso_model)
+```
+
+```{r}
+plot(varImp(lasso_model))
+```
+
+Next, we predict the test set with the Lasso model:
+
+```{r}
+lasso_predictions <- predict(lasso_model, newdata = test_x)
+```
+
+```{r}
+postResample(lasso_predictions, test_y)
+```
+
+The Lasso regression achieves effective dimensionality reduction but the relatively modest R-squared value suggests that further exploration may be necessary. The R-squared of 0.37 is lower than the adjusted R-squared of 0.44 from the multiple linear regression (MLR) model and may not be a suitable model for this data set.
+
+### Neural Network
+
+To capture non-linear and potentially complex relationships, we train a neural network model.
+
+```{r}
+library(nnet)
+
+# Define a tuning grid
+nnetGrid <- expand.grid(
+  size = 1:10,
+  decay = c(0.001, 0.01, 0.1, 0.5))
+
+```
+
+```{r}
+library(foreach)
+library(doParallel)
+```
+
+We create a cluster that is two less than the number of system cores. We will use parallel computing to decrease the run time.
+
+```{r}
+cluster0 <- makeCluster(detectCores()-2)
+```
+
+Next, we start the cluster, train the model, and close the cluster.
+
+```{r}
+
+registerDoParallel(cluster0)
+
+# Train neural network
+set.seed(321)
+nnetTuned <- train(
+  x = train_x,
+  y = train_y,
+  method = "nnet",
+  tuneGrid = nnetGrid,
+  preProcess = c("center", "scale"),
+  trControl = trainControl(method = "cv", number = 10),
+  linout = TRUE,
+  trace = FALSE,
+  maxit = 500,
+  MaxNWts = 10 * (ncol(train_x) + 1) + 10 + 1)
+
+stopCluster(cluster0)
+```
+
+```{r}
+plot(nnetTuned)
+```
+
+```{r}
+plot(varImp(nnetTuned))
+```
+
+The tuning results graph shows that the combination of decay and hidden units significantly impacts model performance, with RMSE values improving as the decay and size are fine-tuned. The variable importance plot highlights Carb Flow, Mnf.Flow, and Alch Rel as key predictors.
+
+Next, we try predicting the test set with the neural network:
+
+```{r}
+nnet_predictions <- predict(nnetTuned, newdata = test_x)
+```
+
+```{r}
+postResample(nnet_predictions, test_y)
+```
+
+The neural network model achieves an R-squared of 0.51. The optimal parameters are size = 9 (number of hidden units) and decay = 0.5 (regularization parameter). Overall, the neural network model has a moderate results.
+
+### Random Forest model
+
+Below we try fitting a random forest model to the data.
+
+One of the tuning parameters for random forests is the number of predictors, k, to choose (referred to as $m_{try}$ - it is recommended to set this parameter to one-third of the number of predictors). Number of trees is an additional parameter - it is recommended to set this to at least 1000.
+
+Below, we create a tune grid for $m_{try}$ parameter.
+
+```{r}
+mtry <- seq(from = 1, to = (ncol(train_x)), by = 4)
+mtry <- as.data.frame(mtry)
+```
+
+We use parallel computing to reduce the run time for training the model.
+
+We create a cluster that is two less than the number of system cores.
+
+```{r}
+cluster <- makeCluster(detectCores()-2)
+```
+
+Next, we start the cluster, train the model, and close the cluster.
+
+```{r, warning=FALSE}
+registerDoParallel(cluster)
+
+set.seed(50)
+
+rf_model <- train(x = train_x, y = train_y, method = 'rf',
+                  tuneGrid = mtry,
+                  trControl = trainControl(method = 'cv', number = 10, allowParallel = T))
+
+stopCluster(cluster)
+```
+
+```{r}
+rf_model
+```
+
+Below is a a plot of the cross-validation RMSE
+
+```{r}
+plot(rf_model)
+```
+
+Below is a plot of the variable importance:
+
+```{r}
+plot(varImp(rf_model))
+```
+
+Next, we try predicting the test set with the random forest model
+
+```{r}
+rf_predictions <- predict(rf_model, newdata = test_x)
+```
+
+We compare the predictions with the actual values:
+
+```{r}
+postResample(pred = rf_predictions, obs = test_y)
+```
+
+### Gradient boosted model
+
+Next, we try fitting a gradient boosted regression tree model to the data. The parameters for this model include tree depth, number of trees, and shrinkage parameter which controls how much of a predicted value from a previous iteration is added to the current iteration (values of \<0.01 are recommended). Lastly, the bagging fraction is kept constant at 0.5.
+
+Below, we create the tuning grid:
+
+```{r}
+gbmGrid <- expand.grid(interaction.depth = seq(1,7, by = 2),
+                       shrinkage = c(0.01,0.1),
+                       n.trees = seq(100,1000, by = 50),
+                       n.minobsinnode = seq(5,30, by = 5))
+```
+
+We will use parallel computing to reduce the training time. Below we start the cluster, train the model, and close the cluster.
+
+```{r}
+cluster2 <- makeCluster(detectCores()-2)
+```
+
+```{r}
+registerDoParallel(cluster2)
+
+set.seed(100)
+
+gbm_model <- train(x = train_x, y = train_y, , method = 'gbm',
+                  tuneGrid = gbmGrid,
+                  trControl = trainControl(method = 'cv', number = 10, allowParallel = T),
+                  verbose = F)
+
+stopCluster(cluster2)
+```
+
+```{r}
+plot(gbm_model)
+```
+
+Below are the parameters for the final model:
+
+```{r}
+gbm_model$bestTune
+```
+
+Next, we try predicting the test set with the gradient boosted model
+
+```{r}
+gbm_predictions <- predict(gbm_model, newdata = test_x)
+```
+
+We compare the predictions with the actual values:
+
+```{r}
+postResample(pred = gbm_predictions, obs = test_y)
+```
+
+### Model Performance Metrics
+
+Below are the performance metrics on the test set for the various models
+
+```{r}
+svm_metrics <- as.data.frame(postResample(pred = svm_predictions, obs = test_y))
+ridge_Metrics <- as.data.frame(postResample(pred = ridge_predictions, obs = test_y))
+lasso_Metrics <- as.data.frame(postResample(pred = lasso_predictions, obs = test_y))
+nnet_Metrics <- as.data.frame(postResample(pred = nnet_predictions, obs = test_y))
+rf_Metrics <- as.data.frame(postResample(pred = rf_predictions, obs = test_y))
+gbm_metrics <- as.data.frame(postResample(pred = gbm_predictions, obs = test_y))
+
+```
+
+```{r}
+model_performance <- cbind(svm_metrics, ridge_Metrics, lasso_Metrics, nnet_Metrics,
+                           rf_Metrics, gbm_metrics)
+colnames(model_performance) <- c('SVM', 'Ridge', 'Lasso', 'NNet', 'RF', 'GBM')
+model_performance <- as.data.frame(t(model_performance))
+```
+
+```{r}
+model_performance
+```
+
+### Model Selection - Random Forest
+
+With the lowest RMSE and MAE and the highest r-squared of the models we fit, we selected Random Forest for the PH prediction of the unseen Student Evaluation data.
+
+In general, the better performance of Random Forest and Gradient Boosting Machine models suggests that the underlying data contains non-linear relationships and complex feature interactions that linear models like Ridge and Lasso cannot adequately model.
+
+## Predict Student Evaluation Data
+
+Below we prepare the prediction data set and predict values using our chosen model.
+
+```{r}
+stu_eval_raw$`Brand Code` <- as.factor(stu_eval_raw$`Brand Code`)
+stu_eval_raw <- kNN(data = stu_eval_raw, variable = 'Brand Code', k = 5, imp_var = F)
+dummy_variables_eval <- dummyVars(~., data = stu_eval_raw, fullRank = T)
+
+stu_eval_transformed <- predict(dummy_variables, newdata = stu_eval_raw)
+stu_eval_transformed <- as.data.frame(stu_eval_transformed)
+```
+
+We drop the PH column
+
+```{r}
+stu_eval_transformed$PHTRUE <- NULL
+```
+
+Apply pre-processing (centering, scaling, imputing
+
+```{r}
+
+preProcess_model_eval <- preProcess(stu_eval_transformed[,4:34], method = c("center", "scale", "knnImpute"))
+stu_eval_transformed_imputed <- stu_eval_transformed
+stu_eval_transformed_imputed[,4:34] <- predict(preProcess_model_eval, stu_eval_transformed_imputed[,4:34])
+```
+
+Remove Near-zero variance
+
+```{r}
+nearZeroVar(stu_eval_transformed_imputed)
+```
+
+There are no zero variance predictors.
+
+Predict PH
+
+```{r}
+# Use the trained random forest model to predict PH
+predictions <- predict(rf_model, newdata = stu_eval_transformed_imputed)
+
+# Add predictions to the original data
+stu_eval_raw$Predicted_PH <- predictions
+```
+
+Reverse centering and scaling
+
+```{r}
+ph_center <- preProcess_model$mean["PH"]
+ph_scale <- preProcess_model$std["PH"]
+
+# Transform predictions back to the original scale
+stu_eval_raw$Predicted_PH <- (stu_eval_raw$Predicted_PH * ph_scale) + ph_center  
+```
+
+View the data:
+
+```{r}
+head(stu_eval_raw["Predicted_PH"])
+```
+
+```{r}
+hist(stu_eval_raw$Predicted_PH)
+```
+
+### Writing to excel
+
+Below we write the evaluation set with predicted values to an excel file.
+
+```{r}
+library(openxlsx)
+
+stu_eval_raw$PH <- NULL
+
+write.xlsx(stu_eval_raw, file = "stu_eval_predicted_values.xlsx")
+```
